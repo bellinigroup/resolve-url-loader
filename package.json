@@ -53,6 +53,6 @@
   "scripts": {
     "lint": "jshint index.js lib test",
     "test": "tape test/*/*.test.js | tap-diff",
-    "postinstall": "cd ./test/test-my-cli && npm install"
+    "pretest": "cd ./test/test-my-cli && npm install"
   }
 }
