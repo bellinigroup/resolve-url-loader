@@ -38,9 +38,8 @@ const getOperations = ({root, log}) => mapParallel(
                 op :
                 [new MkDirOp({path: destDir, log}), op];
             });
-        } else {
-          throw new Error(`Given path is outside the root: "${destPath}"`);
         }
+        throw new Error(`Given path is outside the root: "${destPath}"`);
 
       default:
         throw new Error(`Expected key to be null|string, saw ${typeof srcPath}`);
