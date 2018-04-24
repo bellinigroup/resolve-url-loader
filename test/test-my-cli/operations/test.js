@@ -1,50 +1,50 @@
 'use strict';
 
-const sequence = require('promise-compose');
+const {basename} = require('path');
+const compose = require('compose-function');
 const {assign} = Object;
 
-const {joi, getLog} = require('../lib/options');
-const {withLog, lens} = require('../lib/promise');
+const joi = require('../lib/joi');
+const {lens, sequence} = require('../lib/promise');
+const {operation, assertInOperation} = require('../lib/operation');
+const {assertOutLayer} = require('../lib/assert');
 
-exports.schema = {
-  debug: joi.debug().optional()
-};
+const NAME = basename(__filename).slice(0, -3);
 
-exports.create = (options) => {
+/**
+ * A signature matching Tape tests that will create a test that passes through the context.
+ *
+ * @param {string} name The name of the test
+ * @param {function} fn The test function
+ * @return {function(object):Promise} A pure async function of the outer test
+ */
+exports.create = (name, fn) => {
   joi.assert(
-    options,
-    joi.object(assign({}, exports.schema, {
-      onActivity: joi.func().required()
-    })).unknown(true).required(),
-    'options'
+    name,
+    joi.string().required(),
+    'the test "name"'
+  );
+  joi.assert(
+    fn,
+    joi.func().required(),
+    'the test implementataion function'
   );
 
-  const {debug, onActivity} = options;
-  const log = getLog(debug);
-  const labelled = withLog(log);
-
-  /**
-   * A signature matching Tape tests that will create a test that passes through the context.
-   *
-   * @param {string} name The name of the test
-   * @param {function} fn The test function
-   * @return {function(object):Promise} A pure async function of the outer test
-   */
-  return (name, fn) => labelled(`test: ${name}`)(
-    ({test: test0, layers: layers0}) => {
-
-      const innerTestWithOuterLayers = (test1) =>
-        ({test: test1, layers: layers0});
-
-      const outerTestWithInnerLayers = () => ({layers: layers2}) =>
-        ({test: test0, layers: layers2});
-
-      // keep the instance alive
+  return compose(operation(NAME, name), sequence)(
+    lens('layers', null)(assertOutLayer(`${NAME}() may only be used outside layer()`)),
+    assertInOperation(`misuse: ${NAME}() somehow escaped the operation`),
+    ({test: test0, ...context0}, {onActivity}, log) => {
       onActivity();
+
+      const innerTestWithOuterContext = (test1) =>
+        assign({}, context0, {test: test1});
+
+      const outerTestWithInnerContext = () => (context1) =>
+        assign({}, context1, {test: test0});
 
       // fix race condition with blue-tape ending the test before next test is defined
       //  (testing shows 5ms should be enough but use 20ms to be sure)
-      const waitToEnd = sequence(
+      const delayTape = sequence(
         () => log(`test: ${name}: waiting to end`),
         () => new Promise(resolve => setTimeout(resolve, 20)),
         () => log(`test: ${name}: actual end`)
@@ -54,10 +54,10 @@ exports.create = (options) => {
         `${test0.name}/${name}`,
         (t) => Promise.resolve(t)
           .then(onActivity)
-          .then(lens(innerTestWithOuterLayers, outerTestWithInnerLayers)(fn))
+          .then(lens(innerTestWithOuterContext, outerTestWithInnerContext)(fn))
           .then(resolve)
           .catch(reject)
-          .then(waitToEnd)
+          .then(delayTape)
         )
       );
     });

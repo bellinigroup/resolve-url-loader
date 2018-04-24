@@ -6,7 +6,7 @@ const {Test} = require('tape');
 const {isAbsolute, normalize} = require('path');
 const {existsSync, statSync} = require('fs');
 
-exports.joi = Joi
+module.exports = Joi
   .extend((instance) => ({
     base: instance.bool().strict(true),
     name: 'bool'
@@ -100,6 +100,3 @@ exports.joi = Joi
       }
     ]
   }));
-
-exports.getLog = (debug) =>
-  (typeof debug === 'function') ? debug : debug ? console.log : () => {};

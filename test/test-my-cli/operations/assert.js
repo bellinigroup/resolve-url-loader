@@ -1,39 +1,30 @@
 'use strict';
 
+const {basename} = require('path');
 const compose = require('compose-function');
-const sequence = require('promise-compose');
-const {assign} = Object;
 
-const {joi, getLog} = require('../lib/options');
-const {assertContext, assertExec} = require('../lib/types/assert');
-const {withLog, lens} = require('../lib/promise');
+const joi = require('../lib/joi');
+const {lens, doFirst, sequence} = require('../lib/promise');
+const {operation} = require('../lib/operation');
+const {assertExec} = require('../lib/assert');
+
+const NAME = basename(__filename).slice(0, -3);
 
 exports.schema = {
   debug: joi.debug().optional()
 };
 
-exports.create = (options) => {
-  joi.assert(
-    options,
-    joi.object(assign({}, exports.schema, {
-      onActivity: joi.func().required()
-    })).unknown(true).required(),
-    'options'
-  );
-
-  const {debug, onActivity} = options;
-  const log = getLog(debug);
-  const labelled = withLog(log);
-
-  /**
-   * A simple lens into the test and the result of the last exec().
-   *
-   * @type {function(...function(test, result):Promise):Promise} A sequence monad
-   */
-  return (...fns) => compose(labelled('assert'), sequence)(
-    onActivity,
-    assertContext('assert() needs a preceding init or is otherwise without context'),
-    lens('exec', null)(assertExec('assert() needs a preceding exec()')),
-    ...fns.map((fn) => lens(null, null)(({test, exec}) => fn(test, exec)))
-  );
-};
+/**
+ * A lens into the test and the result of the last exec() as consecutive argumnets.
+ *
+ * @param {...function(test, result):Promise} [fns] Functions of test and exec result
+ * @returns {function(*):Promise} A sequence monad
+ */
+exports.create = compose(
+  operation(NAME),
+  compose(doFirst, lens('exec', null))(
+    assertExec(`${NAME}() needs a preceding exec()`)
+  ),
+  lens(['test', 'exec'], null),
+  sequence
+);

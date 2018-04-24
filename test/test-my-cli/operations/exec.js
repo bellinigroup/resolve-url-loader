@@ -1,95 +1,79 @@
 'use strict';
 
+const {basename} = require('path');
+
 const spawn = require('cross-spawn');
 const compose = require('compose-function');
-const sequence = require('promise-compose');
-const {assign} = Object;
 
-const {joi, getLog} = require('../lib/options');
-const {assertContext} = require('../lib/types/assert');
-const {indent} = require('../lib/string');
-const {withLog, withTime, lens} = require('../lib/promise');
+const joi = require('../lib/joi');
+const {operation, assertInOperation} = require('../lib/operation');
+const {withTime, lens, sequence} = require('../lib/promise');
+
+const NAME = basename(__filename).slice(0, -3);
 
 exports.schema = {
   debug: joi.debug().optional()
 };
 
-exports.create = (options) => {
+/**
+ * Given a command the method will execute in shell and resolve the results, discarding layers.
+ *
+ * @param {string} command A shell command
+ * @return {function(Array):Array} A pure function of layers
+ */
+exports.create = (command) => {
   joi.assert(
-    options,
-    joi.object(assign({}, exports.schema, {
-      root: joi.path().absolute().required(),
-      onActivity: joi.func().required()
-    })).unknown(true).required(),
-    'options'
+    command,
+    joi.string().min(2).required(),
+    'single shell command'
   );
+  const [cmd, ...args] = command.split(' ');
 
-  const {debug, root, onActivity} = options;
-  const log = getLog(debug);
-  const labelled = withLog(log);
-  const logIndented = compose(log, indent(2));
-  const timed = withTime(logIndented);
+  return compose(operation(NAME), lens('layers', 'exec'), sequence)(
+    assertInOperation(`misuse: ${NAME}() somehow escaped the operation`),
+    (layers, _, log) => {
 
-  /**
-   * Given a command the method will execute in shell and resolve the results, discarding layers.
-   *
-   * @param {string} command A shell command
-   * @return {function(Array):Array} A pure function of layers
-   */
-  return (command) => {
-    joi.assert(
-      command,
-      joi.string().min(2).required(),
-      'single shell command'
-    );
+      // locate cwd (required) and env (optional)
+      const {cwd: cwdGetter} = layers.find(({cwd}) => !!cwd) || {};
+      const {env: envGetter} = layers.find(({env}) => !!env) || {};
+      if (!cwdGetter) {
+        throw new Error('There must be a preceding cwd() element before exec()');
+      }
 
-    return compose(labelled('exec'), sequence)(
-      onActivity,
-      assertContext('exec() needs a preceding init or is otherwise without context'),
-      compose(lens('layers', 'exec'), timed)((layers) => {
+      // resolve cwd and env
+      const cwd = cwdGetter();
+      const env = envGetter ? envGetter() : {};
+      log(
+        `layer ${layers.length}`,
+        `cmd ${JSON.stringify(command)}`,
+        `cwd ${JSON.stringify(cwd)}`,
+        `env ${JSON.stringify(env)}`
+      );
 
-        // locate cwd (required) and env (optional)
-        const {cwd: cwdGetter} = layers.find(({cwd}) => !!cwd) || {};
-        const {env: envGetter} = layers.find(({env}) => !!env) || {};
-        if (!cwdGetter) {
-          throw new Error('There must be a preceding cwd() element before exec()');
-        }
+      return {cwd, env};
+    },
+    withTime(({cwd, env}, {root, onActivity}) =>
+      new Promise((resolve) => {
+        const interval = setInterval(onActivity, 50);
+        const child = spawn(cmd, args, {cwd, env, shell: true, stdio: 'pipe'});
 
-        // resolve cwd and env
-        const cwd = cwdGetter();
-        const env = envGetter ? envGetter() : {};
+        let stdout = '';
+        child.stdout.on('data', (data) => stdout += data);
 
-        logIndented(
-          `layer ${layers.length}`,
-          `cmd ${JSON.stringify(command)}`,
-          `cwd ${JSON.stringify(cwd)}`,
-          `env ${JSON.stringify(env)}`
-        );
+        let stderr = '';
+        child.stderr.on('data', (data) => stderr += data);
 
-        return new Promise((resolve) => {
-          const [cmd, ...args] = command.split(' ');
+        child.once('close', (code) => {
+          clearInterval(interval);
+          resolve({root, cwd, code, stdout, stderr});
+        });
 
-          const interval = setInterval(onActivity, 50);
-
-          const child = spawn(cmd, args, {cwd, env, shell: true, stdio: 'pipe'});
-
-          let stdout = '';
-          child.stdout.on('data', (data) => stdout += data);
-
-          let stderr = '';
-          child.stderr.on('data', (data) => stderr += data);
-
-          child.once('close', (code) => {
-            clearInterval(interval);
-            resolve({root, code, stdout, stderr});
-          });
-
-          child.once('error', (error) => {
-            clearInterval(interval);
-            resolve({root, code: 1, stdout, stderr: error.toString()});
-          });
+        child.once('error', (error) => {
+          clearInterval(interval);
+          resolve({root, cwd, code: 1, stdout, stderr: error.toString()});
         });
       })
-    );
-  };
+    ),
+    lens('*', null)(({time, code}, _, log) => log(`time: ${time} sec\ncode: ${code}`))
+  );
 };

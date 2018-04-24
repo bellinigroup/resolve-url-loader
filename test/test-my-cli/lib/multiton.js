@@ -3,7 +3,7 @@
 const ms = require('ms');
 const {assign} = Object;
 
-const {joi} = require('./options');
+const joi = require('./joi');
 
 exports.schema = {
   ttl: joi.alternatives().try(
