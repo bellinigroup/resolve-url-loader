@@ -1,23 +1,28 @@
 'use strict';
 
 const repeat = require('repeat-element');
-const {joi} = require('../options');
+
+const joi = require('../joi');
 const {context} = require('./context');
 const {exec} = require('./exec');
 const {layer, sealedLayer, unsealedLayer} = require('./layer');
 
-const assertSchema = (schema) => {
-  joi.assert(schema, joi.object().schema());
+const assertSchema = (...schemas) => {
+  joi.assert(
+    schemas,
+    joi.array().items(joi.object().schema().required()).required()
+  );
 
-  return (title) => (v) => {
+  return (title) => (...values) => {
     try {
-      joi.assert(v, schema.required());
-    } catch (_) {
-      throw new Error(title);
+      schemas.forEach((schema, i) => joi.assert(values[i], schema.required(), `arg[${i}]`));
+    } catch (error) {
+      throw new Error(`${title}: ${error}`);
     }
-    return v;
+    return values[0];
   };
 };
+exports.assertSchema = assertSchema;
 
 exports.assertTape = assertSchema(
   joi.test().instanceofTape()

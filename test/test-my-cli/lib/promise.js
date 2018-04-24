@@ -1,42 +1,21 @@
 'use strict';
 
 const sequence = require('promise-compose');
+const getValue = require('get-value');
+const setValue = require('set-value');
 const {assign} = Object;
 
 /**
- * Perform a promise with logging at start and completion.
+ * A higher-order-function that times the base function
  *
- * @param {function} log A log method
- * @returns {function(label:string):function(next:function):function(*):Promise}
+ * @type {function(next:function):function(...*):Promise}
  */
-exports.withLog = (log) => (label) => (next) => (v) => {
-  log(`${label}: start`);
-  return Promise.resolve(next(v))
-    .then((vv) => {
-      log(`${label}: success`);
-      return vv;
-    })
-    .catch((e) => {
-      log(`${label}: failure`);
-      throw e;
-    });
-};
-
-/**
- * Perform a promise with timing.
- *
- * @param {function} log A log method
- * @returns {function(next:function):function(*):Promise}
- */
-exports.withTime = (log) => (next) => (v) => {
+exports.withTime = (next) => (...v) => {
   const start = process.hrtime();
-  return Promise.resolve(next(v))
+  return Promise.resolve(next(...v))
     .then((obj) => {
       const [sec, nanosec] = process.hrtime(start);
       const time = sec + nanosec * 1e-9;
-      if (log) {
-        log(`time: ${time}`);
-      }
       return assign({}, obj, {time});
     });
 };
@@ -46,27 +25,46 @@ exports.withTime = (log) => (next) => (v) => {
  *
  * Getter function is `v => vv`. Setter function is `v => vv => v'`.
  *
- * @param {string|function} get The field to get or a getter function
+ * Any number of functions may be lensed as a sequence monad. The original value is available as a
+ * a second argument to each function in the sequence. Additional arguments to the overall function
+ * are available as additional arguments to each function.
+ *
+ * @param {string|function|Array.<string|function>} gets The field to get or a getter function
  * @param {string|function} set The field to set or a setter function
- * @return {function(next:function):function(v:*):Promise}
+ * @return {function(...function):function(...*):Promise}
  */
-exports.lens = (get, set) => {
-  const getter =
-    (typeof get === 'string') && ((v) => (v || {})[get]) ||
+exports.lens = (gets, set) => {
+  const getters = [].concat(gets).map((get) =>
+    (get === '*') && ((v) => v) ||
+    (typeof get === 'string') && ((v) => getValue(v || {}, get)) ||
     (typeof get === 'function') && get ||
-    ((v) => v);
+    exports.constant(undefined)
+  );
 
   const setter =
-    (typeof set === 'string') && ((v) => (vv) => Object.assign({}, v, {[set]: vv})) ||
+    (set === '*') && (() => (vv) => vv) ||
+    (typeof set === 'string') && ((v) => (vv) => setValue(v, set, vv)) ||
     (typeof set === 'function') && set ||
     ((v) => () => v);
 
-  return (next) => (v) =>
-    Promise.resolve(v)
-      .then(getter)
-      .then(next)
-      .then(setter(v));
+  return (next) => (v, ...rest) => {
+    const values = getters.map((get) => get(v));
+    return Promise.resolve(next(...values, ...rest)).then(setter(v));
+  };
 };
+
+/**
+ * A higher-order-function where the given functions occur in sequence.
+ *
+ * @param {...function} fns Any number of functions to perform sequentially
+ * @retuns {function(...*):Promise}
+ */
+exports.sequence = (...fns) => (v, ...rest) =>
+  sequence(
+    ...fns.map((fn) =>
+      (vv) => fn(vv, ...rest)
+    )
+  )(v);
 
 /**
  * A higher-order-function where the given functions occur before the enhanced function.
@@ -75,7 +73,7 @@ exports.lens = (get, set) => {
  * @return {function(next:function):function(*):Promise}
  */
 exports.doFirst = (...fns) => (next) =>
-  sequence(...fns, next);
+  exports.sequence(...fns, next);
 
 /**
  * A higher-order-function where the given functions occur after the enhanced function.
@@ -84,23 +82,22 @@ exports.doFirst = (...fns) => (next) =>
  * @return {function(next:function):function(*):Promise}
  */
 exports.doLast = (...fns) => (next) =>
-  sequence(next, ...fns);
+  exports.sequence(next, ...fns);
 
 /**
  * A higher-order-function where the given functions occur in sequence and their results are
  * accumulated in an array.
  *
- * Each function operates independently on one of the values of the supplied array and the arguments
- * of the overall function.
+ * Each function operates independently on one of the elements of the supplied array and any
+ * additional arguments.
  *
- * @param {function} fn Any number of functions to execute in sequence
- * @return {function(Array): Promise}
+ * @param {function} fn A function to execute on each element in a given array
+ * @return {function(Array, ...*): Promise}
  */
-exports.mapSerial = (fn) => (array) =>
+exports.mapSerial = (fn) => (array, ...rest) =>
   sequence(
     ...array.map((element) =>
-      (results) => Promise.resolve(element)
-        .then(fn)
+      (results) => Promise.resolve(fn(element, ...rest))
         .then((result) => results.concat(result))
     )
   )([]);
@@ -109,14 +106,15 @@ exports.mapSerial = (fn) => (array) =>
  * A higher-order-function where the given functions occur in parallel and their results are
  * accumulated in an array.
  *
- * Each function operates independently on one of the values of the supplied array.
- * *
- * @param {function} fn Any number of functions to execute in sequence
- * @return {function(Array): Promise}
+ * Each function operates independently on one of the elements of the supplied array and any
+ * additional arguments.
+ *
+ * @param {function} fn A function to execute on each element in a given array
+ * @return {function(Array, ...*): Promise}
  */
-exports.mapParallel = (fn) => (array) =>
+exports.mapParallel = (fn) => (array, ...rest) =>
   Promise.all(
-    array.map((element) => Promise.resolve(element).then(fn))
+    array.map((element) => Promise.resolve(fn(element, ...rest)))
   );
 
 /**

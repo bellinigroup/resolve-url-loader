@@ -10,7 +10,7 @@ const Joi = require('joi');
 
 /**
  * A factory for a higher-order-function that enhances an assert() function with a single file
- * of the given extention.
+ * of the given extension.
  *
  * @param {string} ext The extention of the file to locate
  * @param {string} [subdir] A subdirectory of the root

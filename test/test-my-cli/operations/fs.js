@@ -1,51 +1,53 @@
 'use strict';
 
-const {join, dirname} = require('path');
+const {basename, join, dirname} = require('path');
 const compose = require('compose-function');
-const sequence = require('promise-compose');
-const {keys, entries, assign} = Object;
+const {keys, values, entries, assign} = Object;
 
-const {joi, getLog} = require('../lib/options');
-const {assertContext, assertInLayer} = require('../lib/types/assert');
-const {indent} = require('../lib/string');
+const joi = require('../lib/joi');
+const {lens, sequence, mapSerial, mapParallel} = require('../lib/promise');
+const {operation, assertInOperation} = require('../lib/operation');
+const {assertInLayer} = require('../lib/assert');
 const {testIsFile, testIsDir, MkDirOp, CleanOp, SymLinkOp, CopyOp, WriteOp} = require('../lib/fs');
-const {withLog, lens, mapSerial, mapParallel, constant} = require('../lib/promise');
+
+const NAME = basename(__filename).slice(0, -3);
 
 const mergeUndos = ([{undo, ...layer}, ...rest]) => (undos) => ([
   assign({undo: sequence(...undos, undo)}, layer),
   ...rest
 ]);
 
-const getOperations = ({root, log}) => mapParallel(
-  ([srcPath, destPath]) => {
-    switch (true) {
-      case (srcPath === null):
-        return (destPath === root) ?
-          [] :
-          [new MkDirOp({path: destPath, log}), new CleanOp({path: destPath, log})];
+const hashToSrcDestTuple = (hash) => (_, {root}) =>
+  entries(hash).map(([k, v]) => [v, join(root, k)]);
 
-      case (typeof srcPath === 'string'):
-        if (destPath.startsWith(root)) {
-          return Promise.all([testIsFile(srcPath), testIsDir(srcPath)])
-            .then(([isSrcFile, isSrcDir]) =>
-              isSrcDir ? new SymLinkOp({srcPath, destPath, log}) :
-                isSrcFile ? new CopyOp({srcPath, destPath, log}) :
-                  new WriteOp({content: srcPath, destPath, log})
-            )
-            .then((op) => {
-              const destDir = dirname(destPath);
-              return (destDir === root) ?
-                op :
-                [new MkDirOp({path: destDir, log}), op];
-            });
-        }
-        throw new Error(`Given path is outside the root: "${destPath}"`);
+const srcDestTupleToOp = ([srcPath, destPath], {root}, log) => {
+  switch (true) {
+    case (srcPath === null):
+      return (destPath === root) ?
+        [] :
+        [new MkDirOp({path: destPath, log}), new CleanOp({path: destPath, log})];
 
-      default:
-        throw new Error(`Expected key to be null|string, saw ${typeof srcPath}`);
-    }
+    case (typeof srcPath === 'string'):
+      if (destPath.startsWith(root)) {
+        return Promise.all([testIsFile(srcPath), testIsDir(srcPath)])
+          .then(([isSrcFile, isSrcDir]) =>
+            isSrcDir ? new SymLinkOp({srcPath, destPath, log}) :
+              isSrcFile ? new CopyOp({srcPath, destPath, log}) :
+                new WriteOp({content: srcPath, destPath, log})
+          )
+          .then((op) => {
+            const destDir = dirname(destPath);
+            return (destDir === root) ?
+              op :
+              [new MkDirOp({path: destDir, log}), op];
+          });
+      }
+      throw new Error(`Given path is outside the root: "${destPath}"`);
+
+    default:
+      throw new Error(`Expected key to be null|string, saw ${typeof srcPath}`);
   }
-);
+};
 
 const flatten = (array) =>
   array.reduce((r, element) => r.concat(element), []);
@@ -57,51 +59,49 @@ exports.schema = {
   debug: joi.debug().optional()
 };
 
-exports.create = (options) => {
+/**
+ * Given a hash of keys will create directories and files that can be rolled back when the layer
+ * is unlayered.
+ *
+ * All keys are a path to a file or directory.
+ *
+ * - A value of `null` implies the key is a path that should be created and cleaned.
+ * - A value that is an existing file implies the key should be a copy of that file.
+ * - A value that is an existing directory implies the key should be a symlink to that directory.
+ * - Any other `string` is direct file content and to be found in the file which is the key.
+ *
+ * @param {object} hash A hash of file system items
+ * @return {function(Array):Array} A pure function of layers
+ */
+exports.create = (hash) => {
   joi.assert(
-    options,
-    joi.object(assign({}, exports.schema, {
-      root: joi.path().absolute().required(),
-      onActivity: joi.func().required()
-    })).unknown(true).required(),
-    'options'
+    keys(hash),
+    joi.array().items(
+      joi.path().relative().required()
+    ).required(),
+    'single hash where keys are file or directory paths'
+  );
+  joi.assert(
+    values(hash),
+    joi.array().items(
+      joi.alternatives().try(
+        joi.any().only(null),
+        joi.string()
+      ).required()
+    ).required(),
+    'single hash where values are null|existing-file-path|existing-directory-path|file-content'
   );
 
-  const {debug, root, onActivity} = options;
-  const log = getLog(debug);
-  const labelled = withLog(log);
-
-  /**
-   * Given a command the method will execute in shell and resolve the results, discarding layers.
-   *
-   * @param {string} command A shell command
-   * @return {function(Array):Array} A pure function of layers
-   */
-  return (hash) => {
-
-    // check the keys are simple filepaths
-    joi.assert(
-      keys(hash),
-      joi.array().items(
-        joi.path().relative().required()
-      ).required(),
-      'single hash of path:content'
-    );
-
-    return compose(labelled('fs'), sequence)(
-      onActivity,
-      assertContext('fs() needs a preceding init or is otherwise without context'),
-      compose(lens('layers', 'layers'), sequence)(
-        assertInLayer('fs() may only be used inside layer()'),
-        compose(lens(null, mergeUndos), sequence)(
-          constant(entries(hash).map(([k, v]) => [v, join(root, k)])),
-          getOperations({root, log: compose(log, indent(2))}),
-          flatten,
-          mapSerial((op) => op.exec()),
-          reverse,
-          mapSerial((op) => () => op.undo())
-        )
-      )
-    );
-  };
+  return compose(operation(NAME), lens('layers', 'layers'), sequence)(
+    assertInLayer(`${NAME}() may only be used inside layer()`),
+    assertInOperation(`misuse: ${NAME}() somehow escaped the operation`),
+    compose(lens(null, mergeUndos), sequence)(
+      hashToSrcDestTuple(hash),
+      mapParallel(srcDestTupleToOp),
+      flatten,
+      mapSerial((op) => op.exec()),
+      reverse,
+      mapSerial((op) => () => op.undo())
+    )
+  );
 };

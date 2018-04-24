@@ -1,14 +1,17 @@
 'use strict';
 
 const {promisify} = require('util');
+const {basename} = require('path');
 const mkdirp = promisify(require('mkdirp'));
 const compose = require('compose-function');
-const sequence = require('promise-compose');
 const {assign} = Object;
 
-const {joi, getLog} = require('../lib/options');
-const {assertContext, assertOutLayer} = require('../lib/types/assert');
-const {withLog, lens, doFirst, doLast} = require('../lib/promise');
+const joi = require('../lib/joi');
+const {assertOutLayer} = require('../lib/assert');
+const {lens, doFirst, doLast, sequence} = require('../lib/promise');
+const {operation, assertInOperation} = require('../lib/operation');
+
+const NAME = basename(__filename).slice(0, -3);
 
 const createLayer = () => ({
   undo: () => Promise.resolve(),
@@ -23,39 +26,27 @@ exports.schema = {
   debug: joi.debug().optional()
 };
 
-exports.create = (options) => {
-  joi.assert(
-    options,
-    joi.object(assign({}, exports.schema, {
-      root: joi.path().absolute().required(),
-      onActivity: joi.func().required()
-    })).unknown(true).required(),
-    'options'
-  );
-
-  const {debug, root, onActivity} = options;
-  const log = getLog(debug);
-  const labelled = withLog(log);
-
-  /**
-   * A simple lens into layers that creates a new layer.
-   *
-   * @type {function(...function):Promise} A sequence monad
-   */
-  return compose(
-    labelled('layer'),
-    doFirst(
-      onActivity,
-      assertContext('layer() needs a preceding init or is otherwise without context'),
-      compose(lens('layers', 'layers'), sequence)(
-        assertOutLayer('layer() cannot be called within another layer()'),
-        (layers) => ([createLayer(), ...layers])
-      ),
-      lens()(() => mkdirp(root))
-    ),
-    doLast(
-      lens('layers', 'layers')(([layer, ...layers]) => ([sealLayer(layer), ...layers]))
-    ),
-    sequence
-  );
-};
+/**
+ * Opens a new layer.
+ *
+ * Certain operations may only be performed inside an open layer.
+ *
+ * @param {...function} [fns] Functions of context
+ * @type {function(...function):Promise} A sequence monad
+ */
+exports.create = compose(
+  operation(NAME),
+  compose(doFirst, lens('layers', 'layers'), sequence)(
+    assertOutLayer(`${NAME}() cannot be called within another ${NAME}()`),
+    assertInOperation(`misuse: ${NAME}() somehow escaped the operation`),
+    (layers) => ([createLayer(), ...layers]),
+    lens()((_, {root}, log) => {
+      log(`mkdirp: "${root}"`);
+      mkdirp(root);
+    })
+  ),
+  doLast(
+    lens('layers', 'layers')(([layer, ...layers]) => ([sealLayer(layer), ...layers]))
+  ),
+  sequence
+);

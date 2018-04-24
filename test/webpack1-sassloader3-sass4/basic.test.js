@@ -9,13 +9,7 @@ const {withFile, withSourceMappingUrl, withSplitCssAssets} = require('../helper'
 
 const NAME = basename(__dirname);
 
-const {init, test, layer, unlayer, fs, env, cwd, exec, assert} = require('../test-my-cli')({
-  directory: [join(__dirname, '..'), 'tmp', NAME],
-  ttl: '1s',
-  debug: false,
-  env: {append: ['PATH']},
-  unlayer: {inhibit: false}
-});
+const {init, test, layer, unlayer, fs, env, cwd, exec, assert} = require('../test-my-cli');
 
 const assertCss = compose(
   assert,
@@ -126,7 +120,13 @@ const runDefaultConfiguration = sequence(
 require('blue-tape')(
   NAME,
   sequence(
-    init,
+    init({
+      directory: [join(__dirname, '..'), 'tmp', NAME],
+      ttl: '1s',
+      debug: false,
+      env: {append: ['PATH']},
+      unlayer: {inhibit: false}
+    }),
     npmInstall,
     test(
       'immediate path',

@@ -1,6 +1,6 @@
 'use strict';
 
-const {joi} = require('../options');
+const joi = require('../joi');
 const {assign} = Object;
 
 const layerCommon = {
