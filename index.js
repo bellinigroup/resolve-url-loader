@@ -205,8 +205,7 @@ function resolveUrlLoader(content, sourceMap) {
   // process with postcss
   postcss([ resolveUrlPlugin ])
     .process(content, {
-      // we need a prefix to avoid path rewriting of PostCSS
-      from: 'resolve-url-loader!' + loaderUtils.getRemainingRequest(this).split("!").pop(),
+      from: loaderUtils.getRemainingRequest(this).split("!").pop(),
       to: loaderUtils.getCurrentRequest(this).split("!").pop(),
       map: options.sourceMap ? {
         prev: sourceMap,
