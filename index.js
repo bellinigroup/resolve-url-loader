@@ -137,8 +137,11 @@ function resolveUrlLoader(content, sourceMap) {
         if (isValid) {
 
           // reverse the original source-map to find the original sass file
-          var startPosApparent = declaration.source.start,
-            startPosOriginal = sourceMapConsumer && sourceMapConsumer.originalPositionFor(startPosApparent);
+          var startPosApparent = declaration.source.end;
+          // map to source end, since we need to find value declaration (can be a variable)
+          startPosApparent.column -= declaration.value.length;
+
+          var startPosOriginal = sourceMapConsumer && sourceMapConsumer.originalPositionFor(startPosApparent);
 
           // we require a valid directory for the specified file
           directory = startPosOriginal && startPosOriginal.source && path.dirname(startPosOriginal.source);
