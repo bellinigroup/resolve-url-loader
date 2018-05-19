@@ -208,8 +208,7 @@ function resolveUrlLoader(content, sourceMap) {
   // process with postcss
   postcss([ resolveUrlPlugin ])
     .process(content, {
-      from: loaderUtils.getRemainingRequest(this).split("!").pop(),
-      to: loaderUtils.getCurrentRequest(this).split("!").pop(),
+      from: this.resourcePath,
       map: options.sourceMap ? {
         prev: sourceMap,
         sourcesContent: true,
